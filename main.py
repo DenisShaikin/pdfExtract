@@ -13,6 +13,8 @@ from pdf2image import convert_from_path
 # import pytesseract
 # Для удаления дополнительно созданных файлов
 import os
+import pandas as pd
+from translate import Translator
 
 def get_image(layout_object):
     if isinstance(layout_object, LTImage):
@@ -24,17 +26,40 @@ def get_image(layout_object):
             # return get_image(child)
     else:
         return None
-def save_images_from_page(page: LTPage):
+def save_images_from_page(page: LTPage, pagenum):
     images = list(filter(bool, map(get_image, page)))
     # print(images)
-    iw = ImageWriter('cropped')
+    iw = ImageWriter('cropped/' +pagenum)
     # print(images)
     for image in images:
         # print(os.path.exists('./cropped/img5.jpg'))
-        if (not os.path.exists('./cropped/' + image.name + '.jpg')) & \
-            (not os.path.exists('./cropped/' + image.name + '.bmp')):
+        if (not os.path.exists('./cropped/' + pagenum +'/' + image.name + '.jpg')) & \
+            (not os.path.exists('./cropped/' + pagenum +'/' + image.name + '.bmp')):
             # print(image.name)
+            # os.mkdir('./cropped/'+ pagenum)
             iw.export_image(image)
+            if os.path.exists('./cropped/' + pagenum + '/' + image.name + '.jpg'):
+                nwimage = Image.open('./cropped/' + pagenum +'/' + image.name + '.jpg').convert("RGBA")
+                new_image = Image.new("RGBA", nwimage.size, "WHITE")  # Create a white rgba background
+                new_image.paste(nwimage, (0, 0), mask=nwimage)  # Paste the image on the background. Go to the links given below for details.
+                datas = new_image.getdata()
+                #Меняем черный на белый
+                new_image_data = []
+                for item in datas:
+                    # change all white (also shades of whites) pixels to yellow
+                    if item[0] in list(range(0, 25)):
+                        new_image_data.append((255, 255, 255))
+                    else:
+                        new_image_data.append(item)
+
+                # update image data
+                new_image.putdata(new_image_data)
+                new_image.convert('RGB').save('./cropped/' + pagenum +'/' + image.name + '_.jpg', "JPEG")
+            # iw.show('image')
+            # if (os.path.exists('./cropped/' + image.name + '.jpg')):
+            #     im = Image.open('./cropped/' + image.name+ '.jpg')
+            #     im.show()
+            #      filename = input('Как назвать?')
 
 # Создаём функцию для извлечения текста
 def text_extraction(element):
@@ -74,16 +99,24 @@ def extract_table(pdf_path, page_num, table_num):
 # Преобразуем таблицу в соответствующий формат
 def table_converter(table):
     table_string = ''
+    translator = Translator(from_lang='zh-cn', to_lang='ru')
     # Итеративно обходим каждую строку в таблице
+    df = pd.DataFrame()
     for row_num in range(len(table)):
         row = table[row_num]
         # Удаляем разрыв строки из текста с переносом
         cleaned_row = [item.replace('\n', ' ') if item is not None and '\n' in item else 'None' if item is None else item for item in row]
+        if len(cleaned_row) > 0:
+            # print(cleaned_row)
+            rusrow = [translator.translate(item) for item in cleaned_row]
+            df_ = pd.DataFrame([('|'+'|'.join(rusrow)+'|'+'\n').split('|')])
+            df = pd.concat([df, df_])
         # Преобразуем таблицу в строку
         table_string+=('|'+'|'.join(cleaned_row)+'|'+'\n')
     # Удаляем последний разрыв строки
     table_string = table_string[:-1]
-    return table_string
+
+    return table_string, df
 
 # Создаём функцию для вырезания элементов изображений из PDF
 def crop_image(element, pageObj):
@@ -108,7 +141,7 @@ def convert_to_images(input_file,):
 
 if __name__ == '__main__':
     # Находим путь к PDF
-    pdf_path = r'c:/Users/denis/Documents/Denis/Li9/2022-2023L9.pdf'
+    pdf_path = r'c:/Users/denis/Documents/Denis/Li9/2022-2023L9Cropp.pdf'
 
     # создаём объект файла PDF
     pdfFileObj = open(pdf_path, 'rb')
@@ -118,9 +151,11 @@ if __name__ == '__main__':
     # Создаём словарь для извлечения текста из каждого изображения
     text_per_page = {}
     # Извлекаем страницы из PDF
-    for pagenum, page in enumerate(extract_pages(pdf_path, page_numbers=[4, 5])):
+    for pagenum, page in enumerate(extract_pages(pdf_path, maxpages=400)):   #, page_numbers=[4, 5, 6, 7]
         # pagenum = 4
         # page = 4
+        df = pd.DataFrame()
+        print('Страница:',  pagenum)
 
         # Инициализируем переменные, необходимые для извлечения текста со страницы
         pageObj = pdfReaded.pages[pagenum]
@@ -169,14 +204,6 @@ if __name__ == '__main__':
                     # Пропускаем текст, находящийся в таблице
                     pass
 
-            # Проверяем элементы на наличие изображений
-            save_images_from_page(page)
-            # print(element)
-            # if isinstance(element, LTFigure):
-            #     print(element)
-            #     iw = ImageWriter('cropped')
-            #     iw.export_image(element)
-
             # if isinstance(element, LTFigure):
                 # pass
                 # Вырезаем изображение из PDF
@@ -202,7 +229,10 @@ if __name__ == '__main__':
                     # Извлекаем информацию из таблицы
                     table = extract_table(pdf_path, pagenum, table_num)
                     # Преобразуем информацию таблицы в формат структурированной строки
-                    table_string = table_converter(table)
+                    table_string, df_ = table_converter(table)
+                    # print(df_, df_.empty)
+                    if not df_.empty:
+                        df = pd.concat([df, df_])
                     # Добавляем строку таблицы в список
                     text_from_tables.append(table_string)
                     page_content.append(table_string)
@@ -223,12 +253,27 @@ if __name__ == '__main__':
                         first_element = True
                         table_num += 1
 
+            # if not df.empty:
+            #     print(df.iloc[:, 3:5])
+            # Проверяем элементы на наличие изображений
+            save_images_from_page(page, 'Page_' + str(pagenum))
+            # print(element)
+            # if isinstance(element, LTFigure):
+            #     print(element)
+            #     iw = ImageWriter('cropped')
+            #     iw.export_image(element)
+
         # Создаём ключ для словаря
         dctkey = 'Page_' + str(pagenum)
+        if os.path.exists('./cropped/' + dctkey):
+            df.to_csv('./cropped/' + dctkey + '/refs.csv', sep=';', encoding='utf-8')
         # Добавляем список списков как значение ключа страницы
         # text_per_page[dctkey] = [page_text, line_format, text_from_images, text_from_tables, page_content]
         text_per_page[dctkey] = [page_text, line_format,  text_from_tables, page_content]
+
+
     print(text_per_page)
+    # print(df)
 
     # Закрываем объект файла pdf
     pdfFileObj.close()
